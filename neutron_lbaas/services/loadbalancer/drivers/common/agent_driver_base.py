@@ -17,6 +17,7 @@ import uuid
 from neutron.common import constants as q_const
 from neutron.common import exceptions as n_exc
 from neutron.common import rpc as n_rpc
+from neutron import context
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.extensions import portbindings
@@ -25,6 +26,7 @@ from neutron.plugins.common import constants
 from neutron.services import provider_configuration as provconf
 from oslo_config import cfg
 from oslo_log import log as logging
+from neutron.openstack.common import loopingcall
 import oslo_messaging
 from oslo_utils import importutils
 
@@ -42,6 +44,12 @@ AGENT_SCHEDULER_OPTS = [
                        '.ChanceScheduler',
                help=_('Driver to use for scheduling '
                       'pool to a default loadbalancer agent')),
+    cfg.IntOpt('lbaas_agent_monitoring_interval',
+               default=10,
+               help=_('Seconds between inspecting LBaaS agents states '
+                      'in order to find down agents and reschedule '
+                      'loadbalancer instances to active agents, if any. '
+                      'Zero value means no agent monitoring')),
 ]
 
 cfg.CONF.register_opts(AGENT_SCHEDULER_OPTS)
@@ -311,6 +319,15 @@ class LoadBalancerAgentApi(object):
         cctxt.cast(context, 'agent_updated',
                    payload={'admin_state_up': admin_state_up})
 
+    def instance_added(self, context, pool_id, host):
+        cctxt = self.client.prepare(server=host)
+        cctxt.cast(context, 'instance_added',
+                   pool_id=pool_id)
+
+    def instance_removed(self, context, pool_id, host):
+        cctxt = self.client.prepare(server=host)
+        cctxt.cast(context, 'instance_removed',
+                   pool_id=pool_id)
 
 class AgentDriverBase(abstract_driver.LoadBalancerAbstractDriver):
 
@@ -332,6 +349,62 @@ class AgentDriverBase(abstract_driver.LoadBalancerAbstractDriver):
         pool_sched_driver = provconf.get_provider_driver_class(
             cfg.CONF.loadbalancer_pool_scheduler_driver, POOL_SCHEDULERS)
         self.pool_scheduler = importutils.import_object(pool_sched_driver)
+
+        self._setup_agent_monitoring_on_plugin()
+
+    def _setup_agent_monitoring_on_plugin(self):
+        # check if agent monitoring was already set by other plugin driver
+        if hasattr(self.plugin, 'agent_monitoring'):
+            return
+        self.plugin.active_agents = set()
+        interval = cfg.CONF.lbaas_agent_monitoring_interval
+        if interval:
+            self.plugin.agent_monitoring = (
+                loopingcall.FixedIntervalLoopingCall(
+                    self._check_agents_states)
+            )
+            self.plugin.agent_monitoring.start(interval=interval,
+                                               initial_delay=interval)
+
+    def _check_agents_states(self):
+        """Check agents states and reschedule loadbalancers if needed."""
+        ctx = context.get_admin_context()
+        agents = self.plugin.get_lbaas_agents(ctx)
+        for agent in agents:
+            active = self.plugin.is_eligible_agent(True, agent)
+            if not active and agent['id'] in self.plugin.active_agents:
+                self.plugin.active_agents.remove(agent['id'])
+                # reschedule all instances from that agent to other agents
+                LOG.warning(_('LBaaS agent %(agent_id)s on host %(host)s '
+                              'became inactive; going to reschedule instances '
+                              'to other eligible agents'),
+                            {'agent_id': agent['id'], 'host': agent['host']})
+                self._reschedule_instances(ctx, agent)
+            elif active and agent['id'] not in self.plugin.active_agents:
+                self.plugin.active_agents.add(agent['id'])
+
+    def _reschedule_instances(self, context, agent):
+        """Reschedule all loadbalancer instances currently hosted by the agent.
+
+        For each instance which is not host specific, if there is other agent
+        able to host it - reschedule to that agent
+        """
+        pools = self.plugin.list_pools_on_lbaas_agent(context, agent['id'])
+        for pool in pools['pools']:
+            driver = self.plugin._get_driver_for_pool(context, pool['id'])
+
+            new_agent = self.pool_scheduler.reschedule(
+                self.plugin, context, pool['id'], self.device_driver)
+            if new_agent:
+                self.agent_rpc.instance_added(
+                    context, pool['id'], new_agent['host'])
+                # if agent is back online - it will be notified that no
+                # longer handles the instance
+                self.agent_rpc.instance_removed(
+                    context, pool['id'], agent['host'])
+            else:
+                LOG.warning(_('Can\'t reschedule instance %s: no eligible '
+                              'agent found'), pool['id'])
 
     def _set_callbacks_on_plugin(self):
         # other agent based plugin driver might already set callbacks on plugin

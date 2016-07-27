@@ -83,6 +83,9 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
         # pool_id->device_driver_name mapping used to store known instances
         self.instance_mapping = {}
 
+#        agents = self.plugin.get_lbaas_agents(context.get_admin_context())
+
+
     def _load_drivers(self):
         self.device_drivers = {}
         for driver in self.conf.device_driver:
@@ -99,6 +102,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                 raise SystemExit(msg % driver)
 
             driver_name = driver_inst.get_name()
+            self.driver_name = driver_name
             if driver_name not in self.device_drivers:
                 self.device_drivers[driver_name] = driver_inst
             else:
@@ -180,7 +184,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                     'pool', pool_id, constants.ERROR)
                 return
 
-            self.device_drivers[driver_name].deploy_instance(logical_config)
+            self.device_drivers[driver_name].add_instance(logical_config)
             self.instance_mapping[pool_id] = driver_name
             self.plugin_rpc.pool_deployed(pool_id)
         except Exception:
@@ -189,10 +193,16 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
             self.needs_resync = True
 
     def _destroy_pool(self, pool_id):
-        driver = self._get_driver(pool_id)
         try:
-            driver.undeploy_instance(pool_id, delete_namespace=True)
-            del self.instance_mapping[pool_id]
+            logical_config = self.plugin_rpc.get_logical_device(pool_id)
+            driver_name = logical_config['driver']
+            if driver_name not in self.device_drivers:
+                LOG.error(_LE('No device driver on agent: %s.'), driver_name)
+                self.plugin_rpc.update_status(
+                    'pool', pool_id, constants.ERROR)
+                return
+
+            self.device_drivers[driver_name].delete_instance(pool_id, delete_namespace=True)
             self.plugin_rpc.pool_destroyed(pool_id)
         except Exception:
             LOG.exception(_LE('Unable to destroy device for pool: %s'),
@@ -339,3 +349,9 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                              pool_id)
                     self._destroy_pool(pool_id)
             LOG.info(_LI("Agent_updated by server side %s!"), payload)
+
+    def instance_added(self, context, pool_id):
+        self._reload_pool(pool_id)
+
+    def instance_removed(self, context, pool_id):
+        self._destroy_pool(pool_id)

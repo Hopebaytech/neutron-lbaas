@@ -79,7 +79,12 @@ class LbaasAgentSchedulerDbMixin(agentschedulers_db.AgentSchedulerDbMixin,
         else:
             return {'pools': []}
 
-    def get_lbaas_agent_candidates(self, device_driver, active_agents):
+    def get_lbaas_agent_candidates(self, context, device_driver):
+        active_agents = self.get_lbaas_agents(context, active=True)
+        if not active_agents:
+            LOG.warn(_('No active lbaas agents'))
+            return
+
         candidates = []
         for agent in active_agents:
             agent_conf = self.get_configuration_dict(agent)
@@ -105,25 +110,51 @@ class ChanceScheduler(object):
                            'agent_id': lbaas_agent['id']})
                 return
 
-            active_agents = plugin.get_lbaas_agents(context, active=True)
-            if not active_agents:
-                LOG.warn(_LW('No active lbaas agents for pool %s'), pool['id'])
-                return
+            candidates = plugin.get_lbaas_agent_candidates(
+                context, device_driver)
 
-            candidates = plugin.get_lbaas_agent_candidates(device_driver,
-                                                           active_agents)
             if not candidates:
                 LOG.warn(_LW('No lbaas agent supporting device driver %s'),
                          device_driver)
                 return
 
             chosen_agent = random.choice(candidates)
-            binding = PoolLoadbalancerAgentBinding()
-            binding.agent = chosen_agent
-            binding.pool_id = pool['id']
-            context.session.add(binding)
-            LOG.debug('Pool %(pool_id)s is scheduled to lbaas agent '
-                      '%(agent_id)s',
-                      {'pool_id': pool['id'],
-                       'agent_id': chosen_agent['id']})
+            self.bind_pool(context, pool['id'], chosen_agent)
             return chosen_agent
+
+    def reschedule(self, plugin, context, pool_id, device_driver):
+        """Reschedule pool, no matter if it's scheduled already.
+        If there are eligible loadbalancer agents then unbind the pool from
+        the agent currently hosting it (for ex. down agent) and schedule it
+        to any active agent
+        """
+
+        with context.session.begin(subtransactions=True):
+            candidates = plugin.get_lbaas_agent_candidates(
+                context, device_driver)
+            if candidates:
+                chosen_agent = random.choice(candidates)
+                self.unbind_pool(context, pool_id)
+                self.bind_pool(context, pool_id, chosen_agent)
+                return chosen_agent
+
+    def bind_pool(self, context, pool_id, agent):
+        with context.session.begin(subtransactions=True):
+            binding = PoolLoadbalancerAgentBinding()
+            binding.agent = agent
+            binding.pool_id = pool_id
+            context.session.add(binding)
+            LOG.debug(_('Pool %(pool_id)s is scheduled to '
+                        'lbaas agent %(agent_id)s'),
+                      {'pool_id': pool_id, 'agent_id': agent['id']})
+
+    def unbind_pool(self, context, pool_id):
+        with context.session.begin(subtransactions=True):
+            query = context.session.query(PoolLoadbalancerAgentBinding)
+            binding = query.get(pool_id)
+            if binding:
+                agent_id = binding.agent_id
+                context.session.delete(binding)
+                LOG.debug(_('lbaas agent %(agent_id)s no longer hosts '
+                            'pool %(pool_id)s'),
+                          {'agent_id': agent_id, 'pool_id': pool_id})

@@ -117,7 +117,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
         self.pool_to_port_id[pool_id] = logical_config['vip']['port']['id']
 
     @n_utils.synchronized('haproxy-driver')
-    def undeploy_instance(self, pool_id, **kwargs):
+    def delete_instance(self, pool_id, **kwargs):
         cleanup_namespace = kwargs.get('cleanup_namespace', False)
         delete_namespace = kwargs.get('delete_namespace', False)
 
@@ -314,7 +314,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
         return True
 
     @n_utils.synchronized('haproxy-driver')
-    def deploy_instance(self, logical_config):
+    def add_instance(self, logical_config):
         """Deploys loadbalancer if necessary
 
         :return: True if loadbalancer was deployed, False otherwise
@@ -333,8 +333,8 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
         logical_config = self.plugin_rpc.get_logical_device(pool_id)
         # cleanup if the loadbalancer wasn't deployed (in case nothing to
         # deploy or any errors)
-        if not self.deploy_instance(logical_config) and self.exists(pool_id):
-            self.undeploy_instance(pool_id)
+        if not self.add_instance(logical_config) and self.exists(pool_id):
+            self.delete_instance(pool_id)
 
     def create_vip(self, vip):
         self._refresh_device(vip['pool_id'])
@@ -343,7 +343,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
         self._refresh_device(vip['pool_id'])
 
     def delete_vip(self, vip):
-        self.undeploy_instance(vip['pool_id'])
+        self.delete_instance(vip['pool_id'])
 
     def create_pool(self, pool):
         # nothing to do here because a pool needs a vip to be useful
@@ -354,7 +354,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
 
     def delete_pool(self, pool):
         if self.exists(pool['id']):
-            self.undeploy_instance(pool['id'], delete_namespace=True)
+            self.delete_instance(pool['id'], delete_namespace=True)
 
     def create_member(self, member):
         self._refresh_device(member['pool_id'])
@@ -383,7 +383,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
                    if pool_id not in known_pool_ids)
         for pool_id in orphans:
             if self.exists(pool_id):
-                self.undeploy_instance(pool_id, cleanup_namespace=True)
+                self.delete_instance(pool_id, cleanup_namespace=True)
 
 
 # NOTE (markmcclain) For compliance with interface.py which expects objects

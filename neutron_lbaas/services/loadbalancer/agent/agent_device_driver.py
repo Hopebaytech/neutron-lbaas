@@ -27,13 +27,13 @@ class AgentDeviceDriver(object):
         pass
 
     @abc.abstractmethod
-    def deploy_instance(self, logical_config):
-        """Fully deploys a loadbalancer instance from a given config."""
+    def add_instance(self, logical_config):
+        """Handles new instance when added to the hosting agent."""
         pass
 
     @abc.abstractmethod
-    def undeploy_instance(self, pool_id, **kwargs):
-        """Fully undeploys the loadbalancer instance."""
+    def delete_instance(self, pool_id, **kwargs):
+        """Handles the instance when deleted from the hosting agent."""
         pass
 
     @abc.abstractmethod
