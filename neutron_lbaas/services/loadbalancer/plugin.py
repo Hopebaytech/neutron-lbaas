@@ -580,23 +580,23 @@ class LoadBalancerPluginv2(loadbalancerv2.LoadBalancerPluginBaseV2):
         if not listener['default_tls_container_id']:
             raise loadbalancerv2.TLSDefaultContainerNotSpecified()
         if not curr_listener:
-            to_validate.extend([listener['default_tls_container_id']])
-            to_validate.extend(listener['sni_container_ids'])
+            to_validate.append([listener['default_tls_container_id']])
+            to_validate.append(listener['sni_container_ids'])
         elif curr_listener['provisioning_status'] == constants.ERROR:
-            to_validate.extend(curr_listener['default_tls_container_id'])
-            to_validate.extend([
+            to_validate.append(curr_listener['default_tls_container_id'])
+            to_validate.append([
                     container.tls_container_id for container in (
                         curr_listener['sni_containers'])])
         else:
             if (curr_listener['default_tls_container_id'] !=
                     listener['default_tls_container_id']):
-                to_validate.extend(listener['default_tls_container_id'])
+                to_validate.append(listener['default_tls_container_id'])
 
             if (listener['sni_container_ids'] is not None and
                     [container['tls_container_id'] for container in (
                         curr_listener['sni_containers'])] !=
                     listener['sni_container_ids']):
-                to_validate.extend(listener['sni_container_ids'])
+                to_validate.append(listener['sni_container_ids'])
 
         if len(to_validate) > 0:
             validate_tls_containers(to_validate)
