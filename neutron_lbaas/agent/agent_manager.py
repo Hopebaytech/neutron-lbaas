@@ -97,6 +97,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                 raise SystemExit(msg % driver)
 
             driver_name = driver_inst.get_name()
+            self.driver_name = driver_name
             if driver_name not in self.device_drivers:
                 self.device_drivers[driver_name] = driver_inst
             else:
@@ -182,7 +183,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                     'loadbalancer', loadbalancer_id, constants.ERROR)
                 return
 
-            self.device_drivers[driver_name].deploy_instance(loadbalancer)
+            self.device_drivers[driver_name].add_instance(loadbalancer)
             self.instance_mapping[loadbalancer_id] = driver_name
             self.plugin_rpc.loadbalancer_deployed(loadbalancer_id)
         except Exception:
@@ -194,7 +195,18 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
     def _destroy_loadbalancer(self, lb_id):
         driver = self._get_driver(lb_id)
         try:
-            driver.undeploy_instance(lb_id, delete_namespace=True)
+            loadbalancer_dict = self.plugin_rpc.get_loadbalancer(
+                lb_id)
+            loadbalancer = data_models.LoadBalancer.from_dict(
+                loadbalancer_dict)
+            driver_name = loadbalancer.provider.device_driver
+            if driver_name not in self.device_drivers:
+                LOG.error(_LE('No device driver on agent: %s.'), driver_name)
+                self.plugin_rpc.update_status(
+                    'loadbalancer', lb_id, constants.ERROR)
+                return
+
+            self.device_drivers[driver_name].undeploy_instance(lb_id, delete_namespace=True)
             del self.instance_mapping[lb_id]
             self.plugin_rpc.loadbalancer_destroyed(lb_id)
         except Exception:
@@ -404,3 +416,9 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
         healthmonitor = data_models.HealthMonitor.from_dict(healthmonitor)
         driver = self._get_driver(healthmonitor.pool.listener.loadbalancer.id)
         driver.healthmonitor.delete(healthmonitor)
+
+    def instance_added(self, context, loadbalancer_id):
+        self._reload_loadbalancer(loadbalancer_id)
+
+    def instance_removed(self, context, loadbalancer_id):
+        self._destroy_loadbalancer(loadbalancer_id)

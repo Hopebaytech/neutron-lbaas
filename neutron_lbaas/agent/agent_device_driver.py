@@ -52,12 +52,12 @@ class AgentDeviceDriver(object):
         pass
 
     @abc.abstractmethod
-    def deploy_instance(self, loadbalancer):
+    def add_instance(self, loadbalancer):
         """Fully deploys a loadbalancer instance from a given loadbalancer."""
         pass
 
     @abc.abstractmethod
-    def undeploy_instance(self, loadbalancer_id, **kwargs):
+    def delete_instance(self, loadbalancer_id, **kwargs):
         """Fully undeploys the loadbalancer instance."""
         pass
 

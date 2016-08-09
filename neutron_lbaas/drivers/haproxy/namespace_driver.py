@@ -100,7 +100,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
         return DRIVER_NAME
 
     @n_utils.synchronized('haproxy-driver')
-    def undeploy_instance(self, loadbalancer_id, **kwargs):
+    def delete_instance(self, loadbalancer_id, **kwargs):
         cleanup_namespace = kwargs.get('cleanup_namespace', False)
         delete_namespace = kwargs.get('delete_namespace', False)
         namespace = get_ns_name(loadbalancer_id)
@@ -139,7 +139,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
                    if lb_id not in known_loadbalancer_ids)
         for lb_id in orphans:
             if self.exists(lb_id):
-                self.undeploy_instance(lb_id, cleanup_namespace=True)
+                self.delete_instance(lb_id, cleanup_namespace=True)
 
     def get_stats(self, loadbalancer_id):
         socket_path = self._get_state_file_path(loadbalancer_id,
@@ -158,7 +158,7 @@ class HaproxyNSDriver(agent_device_driver.AgentDeviceDriver):
             return {}
 
     @n_utils.synchronized('haproxy-driver')
-    def deploy_instance(self, loadbalancer):
+    def add_instance(self, loadbalancer):
         """Deploys loadbalancer if necessary
 
         :return: True if loadbalancer was deployed, False otherwise
@@ -361,13 +361,13 @@ class LoadBalancerManager(agent_device_driver.BaseLoadBalancerManager):
         loadbalancer_dict = self.driver.plugin_rpc.get_loadbalancer(
             loadbalancer.id)
         loadbalancer = data_models.LoadBalancer.from_dict(loadbalancer_dict)
-        if (not self.driver.deploy_instance(loadbalancer) and
+        if (not self.driver.add_instance(loadbalancer) and
                 self.driver.exists(loadbalancer.id)):
-            self.driver.undeploy_instance(loadbalancer.id)
+            self.driver.delete_instance(loadbalancer.id)
 
     def delete(self, loadbalancer):
         if self.driver.exists(loadbalancer.id):
-            self.driver.undeploy_instance(loadbalancer.id,
+            self.driver.delete_instance(loadbalancer.id,
                                           delete_namespace=True)
 
     def create(self, loadbalancer):
@@ -407,7 +407,7 @@ class ListenerManager(agent_device_driver.BaseListenerManager):
         else:
             # undeploy instance because haproxy will throw error if port is
             # missing in frontend
-            self.driver.undeploy_instance(loadbalancer.id)
+            self.driver.delete_instance(loadbalancer.id)
 
 
 class PoolManager(agent_device_driver.BasePoolManager):

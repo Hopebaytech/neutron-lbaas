@@ -88,7 +88,12 @@ class LbaasAgentSchedulerDbMixin(agentschedulers_db.AgentSchedulerDbMixin,
             return lbs
         return []
 
-    def get_lbaas_agent_candidates(self, device_driver, active_agents):
+    def get_lbaas_agent_candidates(self, context, device_driver):
+        active_agents = self.get_lbaas_agents(context, active=True)
+        if not active_agents:
+            LOG.warn(_('No active lbaas agents'))
+            return
+
         candidates = []
         for agent in active_agents:
             agent_conf = self.get_configuration_dict(agent)
@@ -115,29 +120,61 @@ class ChanceScheduler(object):
                            'agent_id': lbaas_agent['id']})
                 return
 
-            active_agents = plugin.db.get_lbaas_agents(context, active=True)
-            if not active_agents:
-                LOG.warn(
-                    _LW('No active lbaas agents for load balancer %s'),
-                    loadbalancer.id)
-                return
+            candidates = plugin.db.get_lbaas_agent_candidates(
+                context, device_driver)
 
-            candidates = plugin.db.get_lbaas_agent_candidates(device_driver,
-                                                              active_agents)
             if not candidates:
                 LOG.warn(_LW('No lbaas agent supporting device driver %s'),
                          device_driver)
                 return
 
             chosen_agent = random.choice(candidates)
-            binding = LoadbalancerAgentBinding()
-            binding.agent = chosen_agent
-            binding.loadbalancer_id = loadbalancer.id
-            context.session.add(binding)
-            LOG.debug(
-                'Load balancer %(loadbalancer_id)s is scheduled '
-                'to lbaas agent %(agent_id)s', {
-                    'loadbalancer_id': loadbalancer.id,
-                    'agent_id': chosen_agent['id']}
-            )
+            self.bind_loadbalancer(context, loadbalancer.id, chosen_agent)
+            # binding = LoadbalancerAgentBinding()
+            # binding.agent = chosen_agent
+            # binding.loadbalancer_id = loadbalancer.id
+            # context.session.add(binding)
+            # LOG.debug(
+            #     'Load balancer %(loadbalancer_id)s is scheduled '
+            #     'to lbaas agent %(agent_id)s', {
+            #         'loadbalancer_id': loadbalancer.id,
+            #         'agent_id': chosen_agent['id']}
+            # )
             return chosen_agent
+
+    def reschedule(self, plugin, context, loadbalancer_id, device_driver):
+        """Reschedule pool, no matter if it's scheduled already.
+                If there are eligible loadbalancer agents then unbind the pool from
+                the agent currently hosting it (for ex. down agent) and schedule it
+                to any active agent
+                """
+
+        with context.session.begin(subtransactions=True):
+            candidates = plugin.get_lbaas_agent_candidates(
+                context, device_driver)
+            if candidates:
+                chosen_agent = random.choice(candidates)
+                self.unbind_loadbalancer(context, loadbalancer_id)
+                self.bind_loadbalancer(context, loadbalancer_id, chosen_agent)
+                return chosen_agent
+
+    def bind_loadbalancer(self, context, loadbalancer_id, agent):
+        with context.session.begin(subtransactions=True):
+            binding = LoadbalancerAgentBinding()
+            binding.agent = agent
+            binding.loadbalancer_id = loadbalancer_id
+            context.session.add(binding)
+            LOG.debug('Load balancer %(loadbalancer_id)s is scheduled to '
+                        'lbaas agent %(agent_id)s',
+                      {'loadbalancer_id': loadbalancer_id, 'agent_id': agent['id']})
+
+    def unbind_loadbalancer(self, context, loadbalancer_id):
+        with context.session.begin(subtransactions=True):
+            query = context.session.query(LoadbalancerAgentBinding)
+            binding = query.get(loadbalancer_id)
+            if binding:
+                agent_id = binding.agent_id
+                context.session.delete(binding)
+                LOG.debug('lbaas agent %(agent_id)s no longer hosts '
+                            'Load balancer %(loadbalancer_id)s',
+                          {'agent_id': agent_id, 'loadbalancer_id': loadbalancer_id})

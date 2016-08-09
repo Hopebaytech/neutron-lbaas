@@ -577,14 +577,14 @@ class LoadBalancerPluginv2(loadbalancerv2.LoadBalancerPluginBaseV2):
                 validate_tls_container(container_ref)
 
         to_validate = []
-        if not listener['default_tls_container_id']:
-            raise loadbalancerv2.TLSDefaultContainerNotSpecified()
         if not curr_listener:
-            to_validate.append([listener['default_tls_container_id']])
-            to_validate.append(listener['sni_container_ids'])
+            if not listener['default_tls_container_id']:
+                raise loadbalancerv2.TLSDefaultContainerNotSpecified()
+            to_validate.extend([listener['default_tls_container_id']])
+            to_validate.extend(listener['sni_container_ids'])
         elif curr_listener['provisioning_status'] == constants.ERROR:
-            to_validate.append(curr_listener['default_tls_container_id'])
-            to_validate.append([
+            to_validate.extend(curr_listener['default_tls_container_id'])
+            to_validate.extend([
                     container.tls_container_id for container in (
                         curr_listener['sni_containers'])])
         else:
